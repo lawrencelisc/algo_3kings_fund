@@ -20,14 +20,14 @@
 
     Ubuntu 20.04 (Debian-based Linux)
     ```shell script
-    cd ./3kings_fund_hl
+    cd ./algo_3kings_fund
     python3.12 -m venv venv/
     source ./venv/bin/activate
     ```
    
     Windows 10
     ```shell script
-    cd .\3kings_fund_hl
+    cd .\algo_3kings_fund
     python -m venv .\venv\
     .\venv\Scripts\activate
     ```

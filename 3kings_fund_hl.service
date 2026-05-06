@@ -1,16 +1,22 @@
 [Unit]
-Description=3kings_fund_hl - Bybit Quant Bot (LIVE / algo_3kings_fund_hl.py)
+Description=3kings_fund_hl - Hyperliquid quant bot (LIVE / main.py)
 After=network.target
 
 [Service]
 Type=simple
-Environment=SSL_CERT_FILE=/usr/local/app/algo_3kings_fund_hl/venv/lib/python3.12/site-packages/certifi/cacert.pem
-Environment=PYTHONUNBUFFERED=1
+User=root
 WorkingDirectory=/usr/local/app/algo_3kings_fund_hl
-ExecStart=/usr/local/app/algo_3kings_fund_hl/venv/bin/python3.12 -u algo_3kings_fund_hl.py
+
+# Optional: load secrets (TRADE_MODE, HL_WALLET_ADDRESS, HL_PRIVATE_KEY, etc.)
+EnvironmentFile=-/usr/local/app/algo_3kings_fund_hl/.env
+
+Environment=PYTHONUNBUFFERED=1
+# Ubuntu CA bundle (avoids brittle certifi path inside venv)
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
+ExecStart=/usr/local/app/algo_3kings_fund_hl/venv/bin/python -u main.py
 Restart=always
 RestartSec=10
-User=root
 
 [Install]
 WantedBy=multi-user.target
