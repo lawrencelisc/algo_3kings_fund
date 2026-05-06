@@ -1,0 +1,9 @@
+requests
+pandas
+numpy
+matplotlib
+scipy
+ccxt
+# hyperliquid-python-sdk requires eth-utils < 6
+eth-utils>=2.1.0,<6.0.0
+hyperliquid-python-sdk

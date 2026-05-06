@@ -1,0 +1,16 @@
+# Secrets — NEVER commit
+#.env
+#*.env
+
+# Bot runtime files
+bot_state.json
+bot.log
+trades.csv
+equity.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
