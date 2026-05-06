@@ -183,6 +183,15 @@ class LiveExecutor:
                 self._sz_decimals[coin] = 4
         return self._sz_decimals.get(coin, 4)
 
+    @staticmethod
+    def _round_px(px: float) -> float:
+        """Round price to Hyperliquid's tick size (5 significant figures, max 6 dp)."""
+        if px <= 0:
+            return px
+        magnitude = math.floor(math.log10(px))
+        decimals = min(6, max(0, 4 - magnitude))
+        return round(px, decimals)
+
     def _market_order(self, coin: str, is_buy: bool, sz: float) -> Dict:
         """Place an IOC market order; raises on failure."""
         order_type = {"limit": {"tif": "Ioc"}}
@@ -193,9 +202,9 @@ class LiveExecutor:
         mid = float(mids.get(coin, 0))
         if mid <= 0:
             raise RuntimeError(f"Cannot get mid price for {coin}")
-        px = mid * (1 + slippage) if is_buy else mid * (1 - slippage)
-        px = round(px, 4)
-        # Round size DOWN to exchange-required decimal places to avoid invalid size errors
+        raw_px = mid * (1 + slippage) if is_buy else mid * (1 - slippage)
+        px = self._round_px(raw_px)
+        # Round size DOWN to exchange-required lot size to avoid invalid size errors
         sz_dec = self._get_sz_decimals(coin, info)
         sz = math.floor(sz * 10 ** sz_dec) / 10 ** sz_dec
         if sz <= 0:
