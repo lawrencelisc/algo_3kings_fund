@@ -192,25 +192,56 @@ class LiveExecutor:
         decimals = min(6, max(0, 4 - magnitude))
         return round(px, decimals)
 
+    @staticmethod
+    def _ob_vwap(levels: list, n: int = 5) -> Optional[float]:
+        """VWAP of top-n order book levels. levels = [{"px":str,"sz":str}, ...]"""
+        total_val = total_sz = 0.0
+        for lvl in levels[:n]:
+            px = float(lvl["px"])
+            sz = float(lvl["sz"])
+            total_val += px * sz
+            total_sz  += sz
+        return total_val / total_sz if total_sz > 0 else None
+
     def _market_order(self, coin: str, is_buy: bool, sz: float) -> Dict:
-        """Place an IOC market order; raises on failure."""
+        """IOC order priced at 5-level order book VWAP + small safety buffer."""
         order_type = {"limit": {"tif": "Ioc"}}
-        slippage = 0.02  # 2 % safety buffer
+        ob_safety  = 0.0005   # 0.05 % buffer beyond VWAP to ensure IOC fills
+        mid_safety = 0.02     # fallback: 2 % from mid if OB fetch fails
+
         from hyperliquid.info import Info
         info = Info(self.exchange.base_url, skip_ws=True)
-        mids = info.all_mids()
-        mid = float(mids.get(coin, 0))
-        if mid <= 0:
-            raise RuntimeError(f"Cannot get mid price for {coin}")
-        raw_px = mid * (1 + slippage) if is_buy else mid * (1 - slippage)
-        px = self._round_px(raw_px)
-        # Round size DOWN to exchange-required lot size to avoid invalid size errors
+
+        # ── size rounding ──────────────────────────────────────────────────
         sz_dec = self._get_sz_decimals(coin, info)
         sz = math.floor(sz * 10 ** sz_dec) / 10 ** sz_dec
         if sz <= 0:
             raise RuntimeError(f"Computed size rounds to zero for {coin} (szDecimals={sz_dec})")
-        log.info("[LIVE] placing order coin=%s is_buy=%s sz=%s px=%s szDecimals=%d",
-                 coin, is_buy, sz, px, sz_dec)
+
+        # ── price from order book ──────────────────────────────────────────
+        try:
+            ob = info.l2_snapshot(coin)
+            # levels[0] = bids (descending), levels[1] = asks (ascending)
+            bids, asks = ob["levels"][0], ob["levels"][1]
+            side_levels = asks if is_buy else bids
+            vwap = self._ob_vwap(side_levels, n=5)
+            if vwap and vwap > 0:
+                raw_px = vwap * (1 + ob_safety) if is_buy else vwap * (1 - ob_safety)
+                px_src = "OB-VWAP"
+            else:
+                raise ValueError("empty book")
+        except Exception as e:
+            log.warning("[LIVE] OB fetch failed (%s), falling back to mid±%.0f%%", e, mid_safety*100)
+            mids = info.all_mids()
+            mid  = float(mids.get(coin, 0))
+            if mid <= 0:
+                raise RuntimeError(f"Cannot get mid price for {coin}")
+            raw_px = mid * (1 + mid_safety) if is_buy else mid * (1 - mid_safety)
+            px_src = "MID"
+
+        px = self._round_px(raw_px)
+        log.info("[LIVE] placing order coin=%s is_buy=%s sz=%s px=%s src=%s szDecimals=%d",
+                 coin, is_buy, sz, px, px_src, sz_dec)
         result = self.exchange.order(coin, is_buy, sz, px, order_type)
         log.info("[LIVE] order result: %s", result)
         if result.get("status") != "ok":
