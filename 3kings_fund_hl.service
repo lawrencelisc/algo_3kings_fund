@@ -5,16 +5,16 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/usr/local/app/algo_3kings_fund_hl
+WorkingDirectory=/usr/local/app/algo_3kings_fund
 
 # Optional: load secrets (TRADE_MODE, HL_WALLET_ADDRESS, HL_PRIVATE_KEY, etc.)
-EnvironmentFile=-/usr/local/app/algo_3kings_fund_hl/.env
+EnvironmentFile=-/usr/local/app/algo_3kings_fund/.env
 
 Environment=PYTHONUNBUFFERED=1
 # Ubuntu CA bundle (avoids brittle certifi path inside venv)
 Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
-ExecStart=/usr/local/app/algo_3kings_fund_hl/venv/bin/python -u main.py
+ExecStart=/usr/local/app/algo_3kings_fund/venv/bin/python -u main.py
 Restart=always
 RestartSec=10
 
