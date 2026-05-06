@@ -167,7 +167,8 @@ class CoinRunner:
         log.info("[%s] Warmup loaded %d observations.", self.coin, added)
 
     def on_new_settlement(self, settle_ts_ms: int, mark_px: float,
-                          premium: float, funding: float) -> List[Dict]:
+                          premium: float, funding: float,
+                          risk_halted: bool = False) -> List[Dict]:
         """Process one settlement. Returns list of closed trade records."""
         self.last_mark_px = mark_px
         trade_records = []
@@ -179,16 +180,25 @@ class CoinRunner:
         # 2. Push settled premium (overwrites stale warmup value if same ts)
         self.history.push(settle_ts_ms, premium)
 
-        # 3. Close expired positions
+        # 3. Generate signal FIRST so we can decide roll vs close
+        sig = self.sig_gen.generate(premium)
+        self._last_sig = sig
+        signal = sig["signal"]
+
+        # 4. Roll or close expired positions
+        roll_secs = self.cfg.HOLD_HOURS * 3_600_000
         for bot in (self.long_bot, self.short_bot):
-            if bot.should_exit(settle_ts_ms):
+            if not bot.should_exit(settle_ts_ms):
+                continue
+            # Roll: if signal still agrees with position direction and no risk halt
+            if not risk_halted and signal == bot.side:
+                bot.position.planned_exit_ts_ms = settle_ts_ms + roll_secs
+                log.info("[%s] ROLL %s — signal still %s, extending hold (saved 2× fee)",
+                         self.coin, bot.bot_id, signal)
+            else:
                 rec = bot.force_close(mark_px, settle_ts_ms, "TIME")
                 if rec:
                     trade_records.append(rec)
-
-        # 4. Generate signal
-        sig = self.sig_gen.generate(premium)
-        self._last_sig = sig
 
         log.info("[%s] SETTLE %s | px=%.4f prem=%.6f q_lo=%s q_hi=%s sig=%s (%s)",
                  self.coin,
@@ -197,7 +207,7 @@ class CoinRunner:
                  mark_px, premium,
                  f"{sig['q_lo']:.6f}" if sig['q_lo'] is not None else "N/A",
                  f"{sig['q_hi']:.6f}" if sig['q_hi'] is not None else "N/A",
-                 sig["signal"], sig["reason"])
+                 signal, sig["reason"])
 
         return trade_records
 
@@ -538,7 +548,8 @@ class MasterBot:
 
                     # Process this coin's settlement
                     trade_recs = runner.on_new_settlement(
-                        settle_ts_ms, ctx["mark_px"], premium, funding)
+                        settle_ts_ms, ctx["mark_px"], premium, funding,
+                        risk_halted=self.risk.state.halted)
                     for rec in trade_recs:
                         rec["coin"] = runner.coin
                         self._append_trade(rec)
