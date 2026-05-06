@@ -1,5 +1,6 @@
 """Execution layer: paper order simulation, live execution, and risk control."""
 import logging
+import math
 import time
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
@@ -166,16 +167,26 @@ class LiveExecutor:
 
         account = eth_account.Account.from_key(private_key)
         self.exchange = Exchange(account, base_url)
+        self._sz_decimals: Dict[str, int] = {}   # coin → szDecimals cache
         log.info("[LIVE] Executor ready — wallet=%s leverage=%dX",
                  wallet_address[:10] + "…", self.leverage)
+
+    def _get_sz_decimals(self, coin: str, info) -> int:
+        """Return szDecimals for coin (cached after first fetch)."""
+        if coin not in self._sz_decimals:
+            try:
+                meta = info.meta()
+                for asset in meta.get("universe", []):
+                    self._sz_decimals[asset["name"]] = int(asset.get("szDecimals", 6))
+            except Exception as e:
+                log.warning("[LIVE] Could not fetch szDecimals: %s — defaulting to 4", e)
+                self._sz_decimals[coin] = 4
+        return self._sz_decimals.get(coin, 4)
 
     def _market_order(self, coin: str, is_buy: bool, sz: float) -> Dict:
         """Place an IOC market order; raises on failure."""
         order_type = {"limit": {"tif": "Ioc"}}
-        # Use a wide limit price so the IOC fills immediately as a market order.
-        # Hyperliquid doesn't have a native "market" type — IOC at wide limit works.
         slippage = 0.02  # 2 % safety buffer
-        # We need a reference price; fetch from the SDK info endpoint.
         from hyperliquid.info import Info
         info = Info(self.exchange.base_url, skip_ws=True)
         mids = info.all_mids()
@@ -183,9 +194,14 @@ class LiveExecutor:
         if mid <= 0:
             raise RuntimeError(f"Cannot get mid price for {coin}")
         px = mid * (1 + slippage) if is_buy else mid * (1 - slippage)
-        # Round to reasonable precision
         px = round(px, 4)
-        sz = round(sz, 6)
+        # Round size DOWN to exchange-required decimal places to avoid invalid size errors
+        sz_dec = self._get_sz_decimals(coin, info)
+        sz = math.floor(sz * 10 ** sz_dec) / 10 ** sz_dec
+        if sz <= 0:
+            raise RuntimeError(f"Computed size rounds to zero for {coin} (szDecimals={sz_dec})")
+        log.info("[LIVE] placing order coin=%s is_buy=%s sz=%s px=%s szDecimals=%d",
+                 coin, is_buy, sz, px, sz_dec)
         result = self.exchange.order(coin, is_buy, sz, px, order_type)
         log.info("[LIVE] order result: %s", result)
         if result.get("status") != "ok":
@@ -220,14 +236,16 @@ class LiveExecutor:
             log.error("[LIVE] open_position failed: %s", e)
             return None
 
-        # Parse actual fill price from response
+        # Validate that the IOC order was actually filled
         fills = result.get("response", {}).get("data", {}).get("statuses", [{}])
-        fill_px = ref_price
-        for f in fills:
-            if "filled" in f:
-                fill_px = float(f["filled"].get("avgPx", ref_price))
-                sz      = float(f["filled"].get("totalSz", sz))
-                break
+        filled_status = next((f["filled"] for f in fills if "filled" in f), None)
+        if filled_status is None:
+            # Order was rejected or not immediately filled (IOC cancelled)
+            errors = [f.get("error", f) for f in fills]
+            log.error("[LIVE] open_position NOT filled for %s — statuses: %s", bot_id, errors)
+            return None
+        fill_px = float(filled_status.get("avgPx", ref_price))
+        sz      = float(filled_status.get("totalSz", sz))
 
         fee_rate = self.maker_fee
         fee = notional * fee_rate
@@ -259,11 +277,11 @@ class LiveExecutor:
             result = {}
 
         fills = result.get("response", {}).get("data", {}).get("statuses", [{}])
-        fill_px = ref_price
-        for f in fills:
-            if "filled" in f:
-                fill_px = float(f["filled"].get("avgPx", ref_price))
-                break
+        filled_status = next((f["filled"] for f in fills if "filled" in f), None)
+        if filled_status is None:
+            errors = [f.get("error", f) for f in fills]
+            log.error("[LIVE] close_position NOT filled for %s — statuses: %s", pos.bot_id, errors)
+        fill_px = float(filled_status.get("avgPx", ref_price)) if filled_status else ref_price
 
         fee_rate = self.maker_fee
         exit_notional = fill_px * pos.size
