@@ -223,34 +223,6 @@ class CoinRunner:
             self.short_bot.try_open(self.last_mark_px, equity, self.cfg.POSITION_PCT,
                                     self.cfg.HOLD_HOURS, settle_ts_ms)
 
-    @property
-    def has_open_position(self) -> bool:
-        return self.long_bot.has_position or self.short_bot.has_position
-
-    def check_intrabar_exit(self, mark_px: float, live_premium: float,
-                            ts_ms: int) -> List[Dict]:
-        """Close any open position early if live premium signal no longer matches.
-
-        Called every poll (30 s) between settlements.  Exits when the market's
-        real-time premium has reverted inside the band, meaning the edge that
-        opened the trade has disappeared.
-        """
-        trade_records = []
-        live_sig = self.sig_gen.generate(live_premium)["signal"]
-        for bot in (self.long_bot, self.short_bot):
-            if not bot.has_position:
-                continue
-            # Signal still agrees → hold
-            if bot.side == live_sig:
-                continue
-            # Signal flipped or went FLAT → exit early to lock in mean-reversion gain
-            log.info("[%s] EARLY EXIT %s — live prem=%.6f signal flipped %s→%s",
-                     self.coin, bot.bot_id, live_premium, bot.side, live_sig)
-            rec = bot.force_close(mark_px, ts_ms, "SIGNAL_FLIP")
-            if rec:
-                trade_records.append(rec)
-        return trade_records
-
     def unrealized_pnl(self) -> float:
         mark = self.last_mark_px
         upnl = 0.0
@@ -551,30 +523,6 @@ class MasterBot:
                     if ctx:
                         runner.last_mark_px = ctx["mark_px"]
                 self.check_emergency_all(ts_ms)
-
-                # Intra-hour exit: only for runners that have an open position
-                # AND are NOT about to be handled by the settlement trigger below
-                intra_closed_any = False
-                for runner in self.runners:
-                    if not runner.has_open_position:
-                        continue                         # no position → skip
-                    if runner.should_settle(now, hour_floor):
-                        continue                         # settlement handles it
-                    ctx = all_ctxs.get(runner.coin)
-                    if not ctx:
-                        continue
-                    intra_recs = runner.check_intrabar_exit(
-                        ctx["mark_px"], ctx["premium"], ts_ms)
-                    for rec in intra_recs:
-                        rec["coin"] = runner.coin
-                        self._append_trade(rec)
-                        intra_closed_any = True
-
-                if intra_closed_any:
-                    self.equity = self.current_equity()
-                    self.risk.update_equity(self.equity)
-                    self._append_equity()
-                    self.save_state()
 
                 # Settlement trigger — each coin fires at its own minute
                 settled_any = False
