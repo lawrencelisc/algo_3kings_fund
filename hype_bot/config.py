@@ -49,8 +49,8 @@ class Config:
     HOLD_HOURS: int = 1         # exit after N settlement periods
 
     # ===== Capital & sizing =====
-    INITIAL_EQUITY_USDC: float = 300.0   # 10 coins × 5% = 15 USDC/trade @ 1X, above min-order floor
-    POSITION_PCT: float = 0.05  # margin per trade as % of equity
+    INITIAL_EQUITY_USDC: float = 690.0   # 10 coins × 5% = 15 USDC/trade @ 1X, above min-order floor
+    POSITION_PCT: float = 0.08  # margin per trade as % of equity
 
     # ===== Leverage =====
     # 1 = no leverage (safe default).  Upgrade to 3X / 5X after validation.
