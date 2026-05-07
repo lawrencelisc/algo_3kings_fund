@@ -74,8 +74,9 @@ class PaperExecutor:
 
     def open_position(self, bot_id: str, side: str, ref_price: float,
                       equity: float, position_pct: float,
-                      hold_hours: int, ts_ms: int) -> Optional[Position]:
-        margin   = equity * position_pct
+                      hold_hours: int, ts_ms: int,
+                      size_multiplier: float = 1.0) -> Optional[Position]:
+        margin   = equity * position_pct * size_multiplier
         notional = margin * self.leverage        # leverage-adjusted exposure
         if notional <= 0 or ref_price <= 0:
             return None
@@ -97,8 +98,9 @@ class PaperExecutor:
             notional=notional, entry_ts_ms=ts_ms, entry_fee=fee,
             planned_exit_ts_ms=ts_ms + hold_hours * 3_600_000,
         )
-        log.info("[PAPER] OPEN %s %s px=%.6f size=%.6f margin=%.2f notional=%.2f lev=%dX fee=%.4f",
-                 bot_id, side, fill_px, size, margin, notional, self.leverage, fee)
+        log.info("[PAPER] OPEN %s %s px=%.6f size=%.6f margin=%.2f notional=%.2f lev=%dX szX=%.2f fee=%.4f",
+                 bot_id, side, fill_px, size, margin, notional, self.leverage,
+                 size_multiplier, fee)
         return pos
 
     def close_position(self, pos: Position, ref_price: float, ts_ms: int,
@@ -260,8 +262,9 @@ class LiveExecutor:
 
     def open_position(self, bot_id: str, side: str, ref_price: float,
                       equity: float, position_pct: float,
-                      hold_hours: int, ts_ms: int) -> Optional[Position]:
-        margin   = equity * position_pct
+                      hold_hours: int, ts_ms: int,
+                      size_multiplier: float = 1.0) -> Optional[Position]:
+        margin   = equity * position_pct * size_multiplier
         notional = margin * self.leverage
         if notional <= 0 or ref_price <= 0:
             return None
@@ -300,8 +303,9 @@ class LiveExecutor:
             notional=notional, entry_ts_ms=ts_ms, entry_fee=fee,
             planned_exit_ts_ms=ts_ms + hold_hours * 3_600_000,
         )
-        log.info("[LIVE] OPEN %s %s fill_px=%.6f size=%.6f margin=%.2f notional=%.2f lev=%dX fee=%.4f",
-                 bot_id, side, fill_px, sz, margin, notional, self.leverage, fee)
+        log.info("[LIVE] OPEN %s %s fill_px=%.6f size=%.6f margin=%.2f notional=%.2f lev=%dX szX=%.2f fee=%.4f",
+                 bot_id, side, fill_px, sz, margin, notional, self.leverage,
+                 size_multiplier, fee)
         return pos
 
     def close_position(self, pos: Position, ref_price: float, ts_ms: int,
@@ -364,10 +368,8 @@ class RiskState:
 
 
 class RiskManager:
-    def __init__(self, max_combined_dd: float, max_single_pos_dd: float,
-                 initial_equity: float):
+    def __init__(self, max_combined_dd: float, initial_equity: float):
         self.max_combined_dd = max_combined_dd
-        self.max_single_pos_dd = max_single_pos_dd
         self.state = RiskState(peak_equity=initial_equity)
 
     def update_equity(self, equity: float):
@@ -379,17 +381,7 @@ class RiskManager:
             self.state.halted = True
             self.state.halt_reason = (
                 f"Combined DD {self.state.current_dd:.2%} <= -{self.max_combined_dd:.0%}")
-            log.error("🛑 RISK HALT: %s", self.state.halt_reason)
-
-    def should_emergency_close(self, pos: Position, mark_px: float) -> bool:
-        if pos is None or pos.notional <= 0:
-            return False
-        pos_dd = pos.unrealized_pnl(mark_px) / pos.notional
-        if pos_dd <= -self.max_single_pos_dd:
-            log.error("🛑 EMERGENCY CLOSE %s: dd=%.2f%% <= -%.0f%%",
-                      pos.bot_id, pos_dd * 100, self.max_single_pos_dd * 100)
-            return True
-        return False
+            log.error("RISK HALT: %s", self.state.halt_reason)
 
     def can_open_new(self) -> bool:
         return not self.state.halted

@@ -37,14 +37,16 @@ class SubBot:
         return self.position is not None
 
     def try_open(self, ref_price: float, equity: float, position_pct: float,
-                 hold_hours: int, ts_ms: int) -> bool:
+                 hold_hours: int, ts_ms: int,
+                 size_multiplier: float = 1.0) -> bool:
         if self.has_position:
             log.debug("[%s] already has position, skip open", self.bot_id)
             return False
         pos = self.executor.open_position(
             bot_id=self.bot_id, side=self.side, ref_price=ref_price,
             equity=equity, position_pct=position_pct,
-            hold_hours=hold_hours, ts_ms=ts_ms)
+            hold_hours=hold_hours, ts_ms=ts_ms,
+            size_multiplier=size_multiplier)
         if pos:
             self.position = pos
             return True
@@ -216,12 +218,15 @@ class CoinRunner:
         sig = self._last_sig
         if sig is None or not risk.can_open_new():
             return
+        sz_mult = self.spec.size_multiplier
         if sig["signal"] == LONG and not self.long_bot.has_position:
             self.long_bot.try_open(self.last_mark_px, equity, self.cfg.POSITION_PCT,
-                                   self.cfg.HOLD_HOURS, settle_ts_ms)
+                                   self.cfg.HOLD_HOURS, settle_ts_ms,
+                                   size_multiplier=sz_mult)
         elif sig["signal"] == SHORT and not self.short_bot.has_position:
             self.short_bot.try_open(self.last_mark_px, equity, self.cfg.POSITION_PCT,
-                                    self.cfg.HOLD_HOURS, settle_ts_ms)
+                                    self.cfg.HOLD_HOURS, settle_ts_ms,
+                                    size_multiplier=sz_mult)
 
     def unrealized_pnl(self) -> float:
         mark = self.last_mark_px
@@ -274,7 +279,6 @@ class MasterBot:
             log.info("==== PAPER trading mode | leverage=%dX ====", self.cfg.LEVERAGE)
 
         self.risk = RiskManager(self.cfg.MAX_COMBINED_DD,
-                                self.cfg.MAX_SINGLE_POS_DD,
                                 self.cfg.INITIAL_EQUITY_USDC)
 
         self.runners: List[CoinRunner] = [
@@ -461,19 +465,6 @@ class MasterBot:
             runner.warmup(self.client)
 
     # ------------------------------------------------------------------
-    def check_emergency_all(self, ts_ms: int):
-        for runner in self.runners:
-            if runner.last_mark_px <= 0:
-                continue
-            for bot in (runner.long_bot, runner.short_bot):
-                if bot.has_position and self.risk.should_emergency_close(
-                        bot.position, runner.last_mark_px):
-                    rec = bot.force_close(runner.last_mark_px, ts_ms, "EMERGENCY_DD")
-                    if rec:
-                        rec["coin"] = runner.coin
-                        self._append_trade(rec)
-
-    # ------------------------------------------------------------------
     def save_state(self):
         runners_snap = {
             r.coin: {
@@ -517,12 +508,11 @@ class MasterBot:
                 hour_floor = now.replace(minute=0, second=0, microsecond=0)
                 ts_ms      = int(time.time() * 1000)
 
-                # Update mark prices & emergency DD check every poll
+                # Update mark prices every poll
                 for runner in self.runners:
                     ctx = all_ctxs.get(runner.coin)
                     if ctx:
                         runner.last_mark_px = ctx["mark_px"]
-                self.check_emergency_all(ts_ms)
 
                 # Settlement trigger — each coin fires at its own minute
                 settled_any = False

@@ -5,15 +5,20 @@ from typing import List
 
 @dataclass
 class CoinSpec:
-    """Per-coin configuration. Strategy params can be tuned independently."""
+    """Per-coin configuration. Strategy params can be tuned independently.
+
+    Defaults aligned with backtest IS=120d (2880h) lookback to reproduce the
+    statistical object that walk-forward analysis validated.
+    """
     coin: str
-    settlement_minute: int      # minute within UTC hour when funding settles
-    lookback_hours: int = 168   # rolling window for quantile (7 days)
-    min_history_hours: int = 72
-    q_lo: float = 0.05          # LONG threshold (bottom 5%)
-    q_hi: float = 0.95          # SHORT threshold (top 5%)
+    settlement_minute: int = 0   # all coins settle on the hour boundary
+    lookback_hours: int = 2880   # 120 days (matches WFA IS window)
+    min_history_hours: int = 720 # require 30 days before signaling
+    q_lo: float = 0.05           # LONG threshold (override per-coin from WFA)
+    q_hi: float = 0.95           # SHORT threshold
     winsorize_lower: float = 0.01
     winsorize_upper: float = 0.99
+    size_multiplier: float = 1.0 # scale margin: 0.5 = half size for unproven coins
 
 
 @dataclass
@@ -29,28 +34,29 @@ class Config:
     PRIVATE_KEY: str = ""       # 0x...  (EVM private key)
 
     # ===== Coins =====
-    # settlement_minute = the minute past each UTC hour when funding settles.
-    # Tier 1 original: HYPE :00, ATOM :06, GALA :11, IMX :16
-    # Tier 2 added:    SOL :21, LTC :26, OP :31, TIA :36, PENDLE :41, INJ :46
+    # Selected from 2-year WFA OOS results (last 4 windows, ~8 months OOS).
+    # q_lo / q_hi values come from per-coin best_threshold optimised in IS.
+    # All coins settle on the UTC hour boundary; strategy doesn't depend on
+    # funding-payment timing (funding pnl is < 5% of fees in real data).
     COIN_SPECS: List[CoinSpec] = field(default_factory=lambda: [
-        CoinSpec("HYPE",   settlement_minute=0),
-        CoinSpec("ATOM",   settlement_minute=6),
-        CoinSpec("GALA",   settlement_minute=11),
-        CoinSpec("IMX",    settlement_minute=16),
-        CoinSpec("SOL",    settlement_minute=21),
-        CoinSpec("LTC",    settlement_minute=26),
-        CoinSpec("OP",     settlement_minute=31),
-        CoinSpec("TIA",    settlement_minute=36),
-        CoinSpec("PENDLE", settlement_minute=41),
-        CoinSpec("INJ",    settlement_minute=46),
+        # Core (5 windows+ OOS validated, Sharpe ≥ +1.0)
+        CoinSpec("IMX",    q_lo=0.05, q_hi=0.95),               # OOS Sharpe +1.67
+        CoinSpec("XLM",    q_lo=0.05, q_hi=0.95),               # OOS Sharpe +1.69
+        CoinSpec("XRP",    q_lo=0.10, q_hi=0.90),               # OOS Sharpe +1.68
+        CoinSpec("TIA",    q_lo=0.02, q_hi=0.98),               # OOS Sharpe +1.45
+        CoinSpec("PENDLE", q_lo=0.02, q_hi=0.98),               # OOS Sharpe +1.07
+        # Watch (limited samples — half size until 30 trades collected)
+        CoinSpec("HYPE",   q_lo=0.02, q_hi=0.98,
+                 size_multiplier=0.5),                          # 1 OOS window only
     ])
 
     # ===== Strategy (shared defaults) =====
     HOLD_HOURS: int = 1         # exit after N settlement periods
 
     # ===== Capital & sizing =====
-    INITIAL_EQUITY_USDC: float = 690.0   # 10 coins × 5% = 15 USDC/trade @ 1X, above min-order floor
+    INITIAL_EQUITY_USDC: float = 690.0
     POSITION_PCT: float = 0.08  # margin per trade as % of equity
+                                # 5 full + 0.5 HYPE = 5.5 slots × 8% = 44% utilisation
 
     # ===== Leverage =====
     # 1 = no leverage (safe default).  Upgrade to 3X / 5X after validation.
@@ -65,8 +71,10 @@ class Config:
     SLIPPAGE_BPS: float = 0.5       # 0.5 bp conservative paper slippage
 
     # ===== Risk =====
+    # Single-position emergency close removed: at $15-50 notional the trigger
+    # rarely fires, but does interrupt the mean-reversion thesis when it does.
+    # Portfolio-level halt covers the real systemic-risk case.
     MAX_COMBINED_DD: float = 0.15   # halt if portfolio equity DD > 15%
-    MAX_SINGLE_POS_DD: float = 0.08 # emergency close single pos at 8% loss
 
     # ===== Infra =====
     POLL_INTERVAL_SEC: int = 30
