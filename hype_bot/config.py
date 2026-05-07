@@ -13,7 +13,7 @@ class CoinSpec:
     coin: str
     settlement_minute: int = 0   # all coins settle on the hour boundary
     lookback_hours: int = 2880   # 120 days (matches WFA IS window)
-    min_history_hours: int = 720 # require 30 days before signaling
+    min_history_hours: int = 500 # matches WFA minimum IS window (500 data points)
     q_lo: float = 0.05           # LONG threshold (override per-coin from WFA)
     q_hi: float = 0.95           # SHORT threshold
     winsorize_lower: float = 0.01
