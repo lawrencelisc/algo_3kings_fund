@@ -65,6 +65,28 @@ class SubBot:
         self.position = None
         return rec
 
+    def check_trail_stop(self, mark_px: float,
+                         activate_pct: float, trail_pct: float) -> bool:
+        """Update high-watermark and return True if trailing stop should fire."""
+        if not self.has_position or activate_pct <= 0 or trail_pct <= 0:
+            return False
+        upnl_pct = self.position.unrealized_pct(mark_px)
+        # Update high watermark
+        if upnl_pct > self.position.trail_hwm_pct:
+            self.position.trail_hwm_pct = upnl_pct
+        # Only fire once armed (peak has reached activation level)
+        if self.position.trail_hwm_pct < activate_pct:
+            return False
+        # Fire if current PnL falls more than trail_pct below the peak
+        if upnl_pct <= self.position.trail_hwm_pct - trail_pct:
+            log.info("[%s] TRAIL STOP armed at hwm=%.3f%% current=%.3f%% trail=%.3f%%",
+                     self.bot_id,
+                     self.position.trail_hwm_pct * 100,
+                     upnl_pct * 100,
+                     trail_pct * 100)
+            return True
+        return False
+
     def apply_funding(self, funding_rate: float, mark_px: float, ts_ms: int):
         """Funding credited/debited to open position at settlement."""
         if not self.has_position:
@@ -508,11 +530,30 @@ class MasterBot:
                 hour_floor = now.replace(minute=0, second=0, microsecond=0)
                 ts_ms      = int(time.time() * 1000)
 
-                # Update mark prices every poll
+                # Update mark prices + trailing stop check every poll
+                trail_closed_any = False
                 for runner in self.runners:
                     ctx = all_ctxs.get(runner.coin)
-                    if ctx:
-                        runner.last_mark_px = ctx["mark_px"]
+                    if not ctx:
+                        continue
+                    runner.last_mark_px = ctx["mark_px"]
+                    if self.cfg.TRAIL_ACTIVATE_PCT > 0:
+                        for bot in (runner.long_bot, runner.short_bot):
+                            if bot.check_trail_stop(
+                                    ctx["mark_px"],
+                                    self.cfg.TRAIL_ACTIVATE_PCT,
+                                    self.cfg.TRAIL_STOP_PCT):
+                                rec = bot.force_close(ctx["mark_px"], ts_ms, "TRAIL_STOP")
+                                if rec:
+                                    rec["coin"] = runner.coin
+                                    self._append_trade(rec)
+                                    trail_closed_any = True
+
+                if trail_closed_any:
+                    self.equity = self.current_equity()
+                    self.risk.update_equity(self.equity)
+                    self._append_equity()
+                    self.save_state()
 
                 # Settlement trigger — each coin fires at its own minute
                 settled_any = False

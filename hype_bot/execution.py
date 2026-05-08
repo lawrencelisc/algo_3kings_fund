@@ -36,10 +36,14 @@ class Position:
     entry_fee: float
     funding_pnl: float = 0.0
     planned_exit_ts_ms: int = 0
+    trail_hwm_pct: float = 0.0  # high-watermark unrealized PnL as % of notional
 
     def unrealized_pnl(self, mark_px: float) -> float:
         direction = 1.0 if self.side == "LONG" else -1.0
         return direction * (mark_px - self.entry_price) * self.size
+
+    def unrealized_pct(self, mark_px: float) -> float:
+        return self.unrealized_pnl(mark_px) / self.notional if self.notional else 0.0
 
     def to_dict(self):
         return asdict(self)

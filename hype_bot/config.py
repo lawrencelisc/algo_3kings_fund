@@ -71,10 +71,17 @@ class Config:
     SLIPPAGE_BPS: float = 0.5       # 0.5 bp conservative paper slippage
 
     # ===== Risk =====
-    # Single-position emergency close removed: at $15-50 notional the trigger
-    # rarely fires, but does interrupt the mean-reversion thesis when it does.
-    # Portfolio-level halt covers the real systemic-risk case.
     MAX_COMBINED_DD: float = 0.15   # halt if portfolio equity DD > 15%
+
+    # ===== Trailing stop =====
+    # Activates once unrealized PnL reaches TRAIL_ACTIVATE_PCT of notional.
+    # After activation, exits if PnL falls back TRAIL_STOP_PCT below the peak.
+    # Set both to 0.0 to disable.
+    # Example: activate=0.003 (0.3%), trail=0.005 (0.5%)
+    #   → arms when position is up $0.165 on $55 notional
+    #   → exits if it gives back 0.5% ($0.275) from the peak
+    TRAIL_ACTIVATE_PCT: float = 0.003   # 0.3% of notional to arm the trail
+    TRAIL_STOP_PCT: float = 0.005       # 0.5% pullback from peak to trigger exit
 
     # ===== Infra =====
     POLL_INTERVAL_SEC: int = 30
