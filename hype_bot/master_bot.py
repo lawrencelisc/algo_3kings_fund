@@ -216,9 +216,19 @@ class CoinRunner:
                 continue
             # Roll: if signal still agrees with position direction and no risk halt
             if not risk_halted and signal == bot.side:
-                bot.position.planned_exit_ts_ms = settle_ts_ms + roll_secs
-                log.info("[%s] ROLL %s — signal still %s, extending hold (saved 2× fee)",
-                         self.coin, bot.bot_id, signal)
+                if bot.position.roll_count >= self.cfg.MAX_ROLLS:
+                    # Hit roll cap — force exit to prevent runaway holding
+                    log.warning("[%s] MAX_ROLLS (%d) reached for %s — forcing exit",
+                                self.coin, self.cfg.MAX_ROLLS, bot.bot_id)
+                    rec = bot.force_close(mark_px, settle_ts_ms, "MAX_ROLLS")
+                    if rec:
+                        trade_records.append(rec)
+                else:
+                    bot.position.roll_count += 1
+                    bot.position.planned_exit_ts_ms = settle_ts_ms + roll_secs
+                    log.info("[%s] ROLL %s — signal still %s, roll #%d/%d (saved 2× fee)",
+                             self.coin, bot.bot_id, signal,
+                             bot.position.roll_count, self.cfg.MAX_ROLLS)
             else:
                 rec = bot.force_close(mark_px, settle_ts_ms, "TIME")
                 if rec:
@@ -400,6 +410,7 @@ class MasterBot:
                             entry_fee=float(op["entry_fee"]),
                             funding_pnl=float(op.get("funding_pnl", 0.0)),
                             planned_exit_ts_ms=int(op["planned_exit_ts_ms"]),
+                            roll_count=int(op.get("roll_count", 0)),
                         )
                         log.info("Restored [%s] %s: %s entry=%.4f size=%.6f",
                                  runner.coin, key, bot.position.side,

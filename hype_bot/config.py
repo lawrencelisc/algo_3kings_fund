@@ -72,6 +72,7 @@ class Config:
 
     # ===== Risk =====
     MAX_COMBINED_DD: float = 0.15   # halt if portfolio equity DD > 15%
+    MAX_ROLLS: int = 6              # max times a position can be rolled (cap holding at N+1 hours)
 
     # ===== Trailing stop =====
     # Activates once unrealized PnL reaches TRAIL_ACTIVATE_PCT of notional.

@@ -37,6 +37,7 @@ class Position:
     funding_pnl: float = 0.0
     planned_exit_ts_ms: int = 0
     trail_hwm_pct: float = 0.0  # high-watermark unrealized PnL as % of notional
+    roll_count: int = 0         # number of times this position has been rolled
 
     def unrealized_pnl(self, mark_px: float) -> float:
         direction = 1.0 if self.side == "LONG" else -1.0
