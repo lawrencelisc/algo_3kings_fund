@@ -74,6 +74,17 @@ class Config:
     MAX_COMBINED_DD: float = 0.15   # halt if portfolio equity DD > 15%
     MAX_ROLLS: int = 6              # max times a position can be rolled (cap holding at N+1 hours)
 
+    # Hard stop-loss: close (and do NOT roll) if unrealized PnL < -STOP_LOSS_PCT of notional.
+    # Checked at every settlement AND at every poll-loop iteration.
+    # Motivation: without this, a rolled position can compound losses through a trending move
+    # (e.g. XLM MAX_ROLLS: −4.96% / −$2.72 on a single entry — see trades_01.csv).
+    # At 1.5% on $55 notional the loss cap is ~$0.82, saving ~$1.90 vs the unprotected case.
+    STOP_LOSS_PCT: float = 0.015    # 1.5% of notional triggers hard close
+
+    # After a STOP_LOSS close, block new entries on that coin for N hours.
+    # Prevents immediately re-entering a position that is in a trend.
+    COOLDOWN_HOURS: int = 2
+
     # ===== Trailing stop =====
     # Activates once unrealized PnL reaches TRAIL_ACTIVATE_PCT of notional.
     # After activation, exits if PnL falls back TRAIL_STOP_PCT below the peak.

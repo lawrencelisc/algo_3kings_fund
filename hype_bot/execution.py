@@ -295,13 +295,14 @@ class LiveExecutor:
         fill_px = float(filled_status.get("avgPx", ref_price))
         sz      = float(filled_status.get("totalSz", sz))
 
-        fee_rate = self.maker_fee
+        # IOC orders on Hyperliquid execute as taker; use taker_fee for accurate PnL accounting.
+        fee_rate = self.taker_fee
         fee = notional * fee_rate
         self.fills.append(Fill(
             ts_ms=ts_ms, side="BUY" if is_buy else "SELL",
             price=fill_px, size=sz, notional=notional,
             fee_rate=fee_rate, fee_usdc=fee,
-            order_type="MARKET", tag=f"OPEN-{bot_id}",
+            order_type="TAKER", tag=f"OPEN-{bot_id}",
         ))
         pos = Position(
             bot_id=bot_id, side=side, entry_price=fill_px, size=sz,
@@ -332,7 +333,8 @@ class LiveExecutor:
             log.error("[LIVE] close_position NOT filled for %s — statuses: %s", pos.bot_id, errors)
         fill_px = float(filled_status.get("avgPx", ref_price)) if filled_status else ref_price
 
-        fee_rate = self.maker_fee
+        # IOC orders execute as taker on Hyperliquid.
+        fee_rate = self.taker_fee
         exit_notional = fill_px * pos.size
         exit_fee = exit_notional * fee_rate
         direction = 1.0 if pos.side == "LONG" else -1.0
@@ -343,7 +345,7 @@ class LiveExecutor:
             ts_ms=ts_ms, side="SELL" if not is_buy else "BUY",
             price=fill_px, size=pos.size, notional=exit_notional,
             fee_rate=fee_rate, fee_usdc=exit_fee,
-            order_type="MARKET", tag=f"CLOSE-{pos.bot_id}-{reason}",
+            order_type="TAKER", tag=f"CLOSE-{pos.bot_id}-{reason}",
         ))
         log.info("[LIVE] CLOSE %s fill_px=%.6f gross=%.4f fees=%.4f funding=%.4f NET=%.4f (%s)",
                  pos.bot_id, fill_px, gross_pnl,

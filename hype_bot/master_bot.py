@@ -153,6 +153,7 @@ class CoinRunner:
         self.last_settlement_ts: Optional[int] = None
         self.last_mark_px: float = 0.0
         self._last_sig: Optional[Dict] = None
+        self._cooldown_until_ms: int = 0   # block new entries after STOP_LOSS until this ts
 
     @property
     def coin(self) -> str:
@@ -209,6 +210,30 @@ class CoinRunner:
         self._last_sig = sig
         signal = sig["signal"]
 
+        # 3.5. Hard stop-loss: close any position exceeding STOP_LOSS_PCT regardless of
+        # whether it is due for a TIME exit.  Fires before the roll decision so a deeply
+        # losing position can never be extended further.
+        stop_loss_pct = self.cfg.STOP_LOSS_PCT
+        if stop_loss_pct > 0:
+            for bot in (self.long_bot, self.short_bot):
+                if not bot.has_position:
+                    continue
+                upnl_pct = bot.position.unrealized_pct(mark_px)
+                if upnl_pct < -stop_loss_pct:
+                    log.warning(
+                        "[%s] STOP_LOSS at settlement: upnl=%.3f%% < −%.1f%% — closing %s",
+                        self.coin, upnl_pct * 100, stop_loss_pct * 100, bot.bot_id)
+                    rec = bot.force_close(mark_px, settle_ts_ms, "STOP_LOSS")
+                    if rec:
+                        trade_records.append(rec)
+                    self._cooldown_until_ms = (
+                        settle_ts_ms + self.cfg.COOLDOWN_HOURS * 3_600_000)
+                    log.info("[%s] Cooldown active until %s",
+                             self.coin,
+                             datetime.fromtimestamp(
+                                 self._cooldown_until_ms / 1000, tz=timezone.utc
+                             ).strftime("%H:%M UTC"))
+
         # 4. Roll or close expired positions
         roll_secs = self.cfg.HOLD_HOURS * 3_600_000
         for bot in (self.long_bot, self.short_bot):
@@ -249,6 +274,13 @@ class CoinRunner:
                              settle_ts_ms: int) -> None:
         sig = self._last_sig
         if sig is None or not risk.can_open_new():
+            return
+        if settle_ts_ms < self._cooldown_until_ms:
+            log.info("[%s] Stop-loss cooldown active — skipping new entry (until %s)",
+                     self.coin,
+                     datetime.fromtimestamp(
+                         self._cooldown_until_ms / 1000, tz=timezone.utc
+                     ).strftime("%H:%M UTC"))
             return
         sz_mult = self.spec.size_multiplier
         if sig["signal"] == LONG and not self.long_bot.has_position:
@@ -394,6 +426,7 @@ class MasterBot:
             for runner in self.runners:
                 rs = saved_runners.get(runner.coin, {})
                 runner.last_settlement_ts = rs.get("last_settlement_ts")
+                runner._cooldown_until_ms = int(rs.get("cooldown_until_ms", 0))
                 for bot, key in ((runner.long_bot, "long_bot"),
                                  (runner.short_bot, "short_bot")):
                     bd = rs.get(key, {})
@@ -502,6 +535,7 @@ class MasterBot:
         runners_snap = {
             r.coin: {
                 "last_settlement_ts": r.last_settlement_ts,
+                "cooldown_until_ms":  r._cooldown_until_ms,
                 "long_bot":  r.long_bot.stats(),
                 "short_bot": r.short_bot.stats(),
             }
@@ -541,24 +575,44 @@ class MasterBot:
                 hour_floor = now.replace(minute=0, second=0, microsecond=0)
                 ts_ms      = int(time.time() * 1000)
 
-                # Update mark prices + trailing stop check every poll
+                # Update mark prices + trailing stop + hard stop-loss check every poll
                 trail_closed_any = False
                 for runner in self.runners:
                     ctx = all_ctxs.get(runner.coin)
                     if not ctx:
                         continue
                     runner.last_mark_px = ctx["mark_px"]
-                    if self.cfg.TRAIL_ACTIVATE_PCT > 0:
-                        for bot in (runner.long_bot, runner.short_bot):
+                    for bot in (runner.long_bot, runner.short_bot):
+                        if not bot.has_position:
+                            continue
+                        mark = ctx["mark_px"]
+                        # Trail stop (only when activation threshold is set)
+                        if self.cfg.TRAIL_ACTIVATE_PCT > 0:
                             if bot.check_trail_stop(
-                                    ctx["mark_px"],
+                                    mark,
                                     self.cfg.TRAIL_ACTIVATE_PCT,
                                     self.cfg.TRAIL_STOP_PCT):
-                                rec = bot.force_close(ctx["mark_px"], ts_ms, "TRAIL_STOP")
+                                rec = bot.force_close(mark, ts_ms, "TRAIL_STOP")
                                 if rec:
                                     rec["coin"] = runner.coin
                                     self._append_trade(rec)
                                     trail_closed_any = True
+                                continue   # position closed; skip stop-loss check
+                        # Hard stop-loss (intra-hour): catches adverse moves between settlements
+                        if self.cfg.STOP_LOSS_PCT > 0:
+                            upnl_pct = bot.position.unrealized_pct(mark)
+                            if upnl_pct < -self.cfg.STOP_LOSS_PCT:
+                                log.warning(
+                                    "[%s] STOP_LOSS intra-hour: upnl=%.3f%% < −%.1f%% — closing %s",
+                                    runner.coin, upnl_pct * 100,
+                                    self.cfg.STOP_LOSS_PCT * 100, bot.bot_id)
+                                rec = bot.force_close(mark, ts_ms, "STOP_LOSS")
+                                if rec:
+                                    rec["coin"] = runner.coin
+                                    self._append_trade(rec)
+                                    trail_closed_any = True
+                                runner._cooldown_until_ms = (
+                                    ts_ms + self.cfg.COOLDOWN_HOURS * 3_600_000)
 
                 if trail_closed_any:
                     self.equity = self.current_equity()
